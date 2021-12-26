@@ -1,7 +1,8 @@
 const vm = require("vm");
 
 class Runtime {
-	constructor(contextFactory) {
+	constructor(filename, contextFactory) {
+		this.filename = filename;
 		this.contextFactory = contextFactory;
 		this.code = null;
 		this.context = null;
@@ -18,7 +19,7 @@ class Runtime {
 			vm.createContext(this.context);
 			
 			try {
-				this.script = new vm.Script(code);
+				this.script = new vm.Script(code, { filename: this.filename });
 				this.script.runInContext(this.context);
 			} catch (error) {
 				this.context = null;

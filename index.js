@@ -6,14 +6,61 @@ function clone(x) {
 	return JSON.parse(JSON.stringify(x));
 }
 
+function parseStack(text) {
+	let lines = text.split("\n");
+	
+	let stackStart = null;
+	for (let i = 0; i < lines.length; i++) {
+		if (lines[i].match(/^\s*at /)) {
+			stackStart = i;
+			break;
+		}
+	}
+	
+	if (stackStart === null)
+		return { message: text, stack: null };
+	
+	let message = lines[stackStart-1];
+	
+	let stack = lines.slice(stackStart).map(line => {
+		let match = line.match(/^\s*at (?<function>[^ ]+) \((?<filename>.*):(?<line>\d+):(?<column>\d+)\)$/);
+		if (match) return {
+			"function": match.groups.function,
+			filename: match.groups.filename,
+			line: parseInt(match.groups.line),
+			column: parseInt(match.groups.column),
+		};
+		
+		match = line.match(/^\s*at (?<filename>.*):(?<line>\d+):(?<column>\d+)$/);
+		if (match) return {
+			filename: match.groups.filename,
+			line: parseInt(match.groups.line),
+			column: parseInt(match.groups.column),
+		};
+		
+		return {};
+	});
+	
+	return { message, stack };
+}
+
+function filterStack(stack, filenames) {
+	for (let i = 0; i < stack.length; i++) {
+		if (!stack[i].filename || !filenames.includes(stack[i].filename))
+			return stack.slice(0, i);
+	}
+	
+	return stack;
+}
+
 function createContext(conn, workerLog) {
 	return {
 		console: {
 			log(...message) {
-				workerLog("console.log", { message });
+				workerLog("console.log", { message, stack: filterStack(parseStack(new Error().stack).stack.slice(1), ["<listener>"]) });
 			},
 			error(...message) {
-				workerLog("console.error", { message });
+				workerLog("console.error", { message, stack: filterStack(parseStack(new Error().stack).stack.slice(1), ["<listener>"]) });
 			},
 		},
 		async get(pattern) {
@@ -41,7 +88,7 @@ class Listener {
 	constructor(object, query) {
 		this.object = object;
 		this.query = query;
-		this.runtime = new Runtime(() => createContext(client, this.log.bind(this)));
+		this.runtime = new Runtime("<listener>", () => createContext(client, this.log.bind(this)));
 		this.synchronize = new Synchronize();
 		
 		this.enqueueEvent("onStart", this.query.objects);
@@ -59,8 +106,14 @@ class Listener {
 		this.synchronize.do(async () => {
 			console.log("execute event", this.object.name, event);
 			let [error, result] = await this.runtime.execute(code, event, dataClone);
-			if (error != null)
-				this.log("error", { error: ""+(error.stack ? error.stack : error) });
+			if (error != null) {
+				if (error.hasOwnProperty("stack")) {
+					let { message, stack } = parseStack(error.stack);
+					this.log("error", { error: message, stack: filterStack(stack, ["<listener>"]) });
+				} else {
+					this.log("error", { error: ""+error });
+				}
+			}
 		});
 	}
 	
